@@ -1,0 +1,14 @@
+# Ignorer les fichiers de configuration
+*.env
+*.ini
+
+# Ignorer les fichiers de cache
+__pycache__/
+*.pyc
+
+# Ignorer les fichiers de log
+*.log
+
+# Ignorer les dossiers de dépendances
+node_modules/
+venv/

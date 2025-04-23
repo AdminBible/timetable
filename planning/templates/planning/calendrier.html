@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Calendrier Hebdomadaire</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        .calendar-container {
+            margin: 20px;
+        }
+        .calendar-header {
+            background-color: #f8f9fa;
+            padding: 10px;
+            margin-bottom: 20px;
+        }
+        .calendar-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        .calendar-table th, .calendar-table td {
+            border: 1px solid #dee2e6;
+            padding: 8px;
+            text-align: center;
+        }
+        .calendar-table th {
+            background-color: #f8f9fa;
+        }
+        .cours-cell {
+            background-color: #e9ecef;
+            padding: 5px;
+            margin: 2px;
+            border-radius: 4px;
+            cursor: move;
+        }
+        .cours-cell.dragging {
+            opacity: 0.5;
+        }
+        .time-cell {
+            background-color: #f8f9fa;
+            font-weight: bold;
+            width: 100px;
+        }
+        .drop-target {
+            min-height: 50px;
+            position: relative;
+        }
+        .suggestions-modal {
+            display: none;
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: white;
+            padding: 20px;
+            border-radius: 5px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+            z-index: 1000;
+        }
+        .suggestion-btn {
+            margin: 5px;
+            padding: 5px 10px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+        .suggestion-btn:hover {
+            background-color: #0056b3;
+        }
+    </style>
+</head>
+<body>
+    <div class="container calendar-container">
+        <div class="calendar-header">
+            <div class="row">
+                <div class="col-md-4">
+                    <select id="groupe-select" class="form-select">
+                        {% for groupe in groupes %}
+                            <option value="{{ groupe.id }}">{{ groupe.nom }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-md-4">
+                    <select id="semaine-select" class="form-select">
+                        {% for i in "123456789"|make_list %}
+                            <option value="{{ i }}" {% if i == semaine_actuelle|stringformat:"i" %}selected{% endif %}>
+                                Semaine {{ i }}
+                            </option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        <table class="calendar-table">
+            <thead>
+                <tr>
+                    <th>Heure</th>
+                    {% for jour in jours_semaine %}
+                        <th>{{ jour }}</th>
+                    {% endfor %}
+                </tr>
+            </thead>
+            <tbody>
+                {% for periode in periodes %}
+                <tr>
+                    <td class="time-cell">{{ periode.heure_debut|time:"H:i" }} - {{ periode.heure_fin|time:"H:i" }}</td>
+                    {% for jour in jours_semaine %}
+                    <td class="drop-target" 
+                        id="cell-{{ jour }}-{{ periode.id }}"
+                        data-jour="{{ jour }}" 
+                        data-periode-id="{{ periode.id }}"
+                        data-heure-debut="{{ periode.heure_debut|time:'H:i' }}"
+                        data-heure-fin="{{ periode.heure_fin|time:'H:i' }}"
+                        ondrop="drop(event)"
+                        ondragover="allowDrop(event)">
+                        <!-- Les cours seront chargés ici via AJAX -->
+                    </td>
+                    {% endfor %}
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Modal pour les suggestions -->
+    <div id="suggestions-modal" class="suggestions-modal">
+        <h4 id="conflict-message"></h4>
+        <p>Suggestions de créneaux disponibles :</p>
+        <div id="suggestions-container"></div>
+        <button onclick="document.getElementById('suggestions-modal').style.display = 'none'">Fermer</button>
+    </div>
+
+    <script>
+        // Fonction pour obtenir le token CSRF
+        function getCookie(name) {
+            let cookieValue = null;
+            if (document.cookie && document.cookie !== '') {
+                const cookies = document.cookie.split(';');
+                for (let i = 0; i < cookies.length; i++) {
+                    const cookie = cookies[i].trim();
+                    if (cookie.substring(0, name.length + 1) === (name + '=')) {
+                        cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+                        break;
+                    }
+                }
+            }
+            return cookieValue;
+        }
+
+        function chargerCours() {
+            const groupeId = document.getElementById('groupe-select').value;
+            const semaine = document.getElementById('semaine-select').value;
+            
+            const xhr = new XMLHttpRequest();
+            xhr.open('GET', `/planning/cours/${groupeId}/${semaine}/`, true);
+            
+            xhr.onload = function() {
+                if (xhr.status === 200) {
+                    const cours = JSON.parse(xhr.responseText);
+                    console.log('Cours reçus:', cours);
+                    
+                    // Nettoyer toutes les cellules
+                    document.querySelectorAll('[id^="cell-"]').forEach(cell => {
+                        cell.innerHTML = '';
+                    });
+                    
+                    // Remplir les cellules avec les cours
+                    cours.forEach(cours => {
+                        // Trouver la cellule correspondante en fonction du jour et de l'heure
+                        const cellules = document.querySelectorAll('[id^="cell-"]');
+                        const cellule = Array.from(cellules).find(cell => {
+                            const cellJour = cell.getAttribute('data-jour');
+                            const cellHeureDebut = cell.getAttribute('data-heure-debut');
+                            return cellJour === cours.jour && cellHeureDebut === cours.heure_debut;
+                        });
+
+                        if (cellule) {
+                            // Créer un nouveau cours-cell
+                            const coursCell = document.createElement('div');
+                            coursCell.className = 'cours-cell';
+                            coursCell.setAttribute('draggable', 'true');
+                            coursCell.setAttribute('data-cours-id', cours.id);
+                            coursCell.setAttribute('ondragstart', 'drag(event)');
+                            
+                            // Ajouter le contenu du cours
+                            coursCell.innerHTML = `
+                                <strong>${cours.matiere}</strong><br>
+                                ${cours.professeur}<br>
+                                ${cours.salle}<br>
+                                ${cours.heure_debut}-${cours.heure_fin}
+                            `;
+                            
+                            // Ajouter le cours à la cellule
+                            cellule.appendChild(coursCell);
+                        } else {
+                            console.warn(`Cellule non trouvée pour le cours: ${cours.matiere} - ${cours.jour} - ${cours.heure_debut}`);
+                        }
+                    });
+                }
+            };
+            
+            xhr.send();
+        }
+
+        // Fonctions pour le drag & drop
+        function allowDrop(ev) {
+            ev.preventDefault();
+        }
+
+        function drag(ev) {
+            ev.dataTransfer.setData("cours_id", ev.target.getAttribute('data-cours-id'));
+            ev.target.classList.add('dragging');
+        }
+
+        function afficherSuggestions(message, suggestions, cours_id) {
+            const modal = document.getElementById('suggestions-modal');
+            const messageEl = document.getElementById('conflict-message');
+            const container = document.getElementById('suggestions-container');
+            
+            messageEl.textContent = message;
+            container.innerHTML = '';
+            
+            suggestions.forEach(suggestion => {
+                const btn = document.createElement('button');
+                btn.className = 'suggestion-btn';
+                btn.textContent = `${suggestion.jour} - Période ${suggestion.periode_id}`;
+                btn.onclick = function() {
+                    deplacerCours(cours_id, suggestion.jour, suggestion.periode_id);
+                    modal.style.display = 'none';
+                };
+                container.appendChild(btn);
+            });
+            
+            modal.style.display = 'block';
+        }
+
+        function deplacerCours(cours_id, jour, periode_id) {
+            const semaine = document.getElementById('semaine-select').value;
+            
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', '/planning/update-cours/', true);
+            xhr.setRequestHeader('Content-Type', 'application/json');
+            xhr.setRequestHeader('X-CSRFToken', getCookie('csrftoken'));
+
+            xhr.onload = function() {
+                if (xhr.status === 200) {
+                    const response = JSON.parse(xhr.responseText);
+                    if (response.success) {
+                        chargerCours();
+                    } else if (response.conflict) {
+                        afficherSuggestions(response.message, response.suggestions, cours_id);
+                    }
+                }
+            };
+
+            xhr.send(JSON.stringify({
+                cours_id: cours_id,
+                jour: jour,
+                periode_id: periode_id,
+                semaine: semaine
+            }));
+        }
+
+        function drop(ev) {
+            ev.preventDefault();
+            const cours_id = ev.dataTransfer.getData("cours_id");
+            const targetCell = ev.target.closest('td');
+            const jour = targetCell.getAttribute('data-jour');
+            const periode_id = targetCell.getAttribute('data-periode-id');
+
+            deplacerCours(cours_id, jour, periode_id);
+
+            // Retirer la classe dragging
+            document.querySelectorAll('.dragging').forEach(el => {
+                el.classList.remove('dragging');
+            });
+        }
+
+        // Charger les cours au chargement de la page
+        document.addEventListener('DOMContentLoaded', chargerCours);
+        
+        // Recharger les cours quand on change de groupe ou de semaine
+        document.getElementById('groupe-select').addEventListener('change', chargerCours);
+        document.getElementById('semaine-select').addEventListener('change', chargerCours);
+    </script>
+</body>
+</html> 
